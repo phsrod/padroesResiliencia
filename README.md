@@ -7,6 +7,43 @@ Sumário rápido
 - Script de demo: `fast/scripts/run_demo.py` (rodar sem servidor).
 - Logs: `fast/logs/app.log` (arquivo criado em runtime).
 
+## Tecnologias utilizadas
+
+Uma visão organizada das tecnologias e padrões presentes nesta implementação:
+
+- Linguagem
+	- Python 3.9+ (uso de async/await para concorrência assíncrona).
+
+- Framework / ASGI
+	- FastAPI — definição de endpoints, validação e documentação automática (OpenAPI/Swagger). (arquivo: `fast/src/main.py`)
+	- Uvicorn — servidor ASGI recomendado para executar a aplicação (usado no modo "com servidor").
+
+- Cliente HTTP assíncrono
+	- httpx.AsyncClient — responsável por realizar chamadas HTTP externas de forma assíncrona. (arquivo: `fast/src/client.py`)
+
+- Concorrência e utilitários assíncronos
+	- asyncio — loop assíncrono do Python; `asyncio.Semaphore` é usado como Bulkhead para limitar concorrência. (arquivo: `fast/src/client.py`)
+
+- Padrões de resiliência implementados
+	- Rate Limiter (Token Bucket) — controla o ritmo das requisições para evitar sobrecarga do serviço externo.
+	- Bulkhead (Semaphore) — limita a concorrência local para proteger recursos.
+	- Circuit Breaker (CLOSED / OPEN / HALF-OPEN) — evita chamadas repetidas a serviços com falha; inclui endpoints para forçar/resetar o estado. (arquivos: `fast/src/client.py`, `fast/src/main.py`)
+	- Timeout + Retry (com backoff exponencial) — cancela chamadas lentas e tenta novas tentativas quando aplicável.
+	- Fallback — resposta degradada quando todas as tentativas falham ou quando o circuito está aberto.
+
+- Observabilidade / Logs
+	- módulo `logging` do Python — grava eventos e transições do circuito em `fast/logs/app.log`.
+	- Endpoint `/logs` para consultar os logs via HTTP. (arquivo: `fast/src/main.py`)
+
+- Ferramentas e execução
+	- `venv` / `pip` — gerenciamento de ambiente e instalação das dependências descritas em `fast/requirements.txt`.
+	- PowerShell — comandos de execução e demonstração fornecidos para Windows (README).
+	- `fast/scripts/run_demo.py` — modo "sem servidor" para executar os cenários localmente sem expor endpoints HTTP.
+
+- Serviço externo usado no demo
+	- httpbin.org — endpoints públicos usados para simular respostas, latências e erros (`/get`, `/delay/3`, `/status/500`).
+
+
 Requisitos
 - Python 3.9+ (recomendado 3.10+).
 - Conexão com a internet para acessar `https://httpbin.org` (pode usar uma API local se preferir offline).
@@ -65,23 +102,82 @@ Endpoints (e o que fazem)
 
 Diagrama da arquitetura (ASCII)
 
-Presentation / UI (browser / curl)
-	|
-	V
-FastAPI (src/main.py)  --->  ResilientClient (src/client.py)
-																 |
-																 +--> RateLimiter (token-bucket)
-																 |
-																 +--> Bulkhead (asyncio.Semaphore)
-																 |
-																 +--> CircuitBreaker (fail counters, OPEN/HALF_OPEN/CLOSED)
-																 |
-																 +--> Retry + Timeout (tentativas com backoff)
-																 |
-																 +--> Fallback (resposta de contingência)
-																 |
-																 V
-												 External API (https://httpbin.org)
+							┌──────────────────────────────────────────────────────────────┐
+							│                    🧩 RESILIENCE DEMO (FastAPI)              │
+							│        Demonstração de Padrões de Resiliência Assíncronos    │
+							└──────────────────────────────────────────────────────────────┘
+
+												┌──────────────────────┐
+												│   Usuário / Cliente  │
+												│ (Browser / curl / API│
+												└──────────┬───────────┘
+													       │  (Requisição HTTP)
+														   ▼
+												┌────────────────────────────┐
+												│      FastAPI Server        │
+												│     (src/main.py)          │
+												└──────────┬─────────────────┘
+														   │  (Chama cliente resiliente)
+														   ▼
+												┌────────────────────────────┐
+												│   ResilientClient (async)  │
+												│       (src/client.py)      │
+												└──────────┬─────────────────┘
+														   │
+														   ▼ 
+									┌────────────────────────────────────────────────────┐
+									│               Cadeia de Padrões                    │
+									│────────────────────────────────────────────────────│
+									│                                                    │
+									│  ① Rate Limiter (Token Bucket)                     │
+									│     → Controla o ritmo das chamadas                │
+									│     → Evita sobrecarga no serviço externo          │
+									│                                                    │
+									│  ② Bulkhead (asyncio.Semaphore)                    │
+									│     → Limita concorrência                          │
+									│     → Evita saturação local                        │
+									│                                                    │
+									│  ③ Circuit Breaker                                 │
+									│     → Monitora falhas sucessivas                   │
+									│     → Estados: CLOSED → OPEN → HALF-OPEN           │
+									│     → Bloqueia novas chamadas quando OPEN          │
+									│                                                    │
+									│  ④ Timeout + Retry                                 │
+									│     → Timeout cancela chamadas lentas              │
+									│     → Retry tenta novamente com backoff exponencial│
+									│                                                    │
+									│  ⑤ Fallback                                        │
+									│     → Retorna resposta padrão quando falhar tudo   │
+									│     → Garante disponibilidade degradada            │
+									└────────────────────────────────────────────────────┘
+													       │
+													       ▼
+												┌────────────────────────────┐
+												│  API Externa (httpbin.org) │
+												│    /get, /delay/3, etc.    │
+												└──────────┬─────────────────┘
+													       │
+													       ▼
+												┌───────────────────────────┐
+												│     Resposta / Fallback   │
+												│    (JSON + Logs gerados)  │
+												└──────────┬────────────────┘
+														   │
+														   ▼
+												┌────────────────────────────┐
+												│     FastAPI retorna JSON    │
+												│ + registra logs em app.log  │
+												└────────────────────────────┘
+
+								───────────────────────────────────────────────────────────────
+📂 Logs em: fast/logs/app.log
+🧠 Demonstração:
+   - CircuitBreaker → /invoke_error
+   - Timeout/Retry  → /invoke_delay
+   - Bulkhead/RateLimiter → /invoke
+   - Fallback       → /force_open
+───────────────────────────────────────────────────────────────
+
 
 Fluxo resumido
 1) Chamadas chegam no FastAPI.
